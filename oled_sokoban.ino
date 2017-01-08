@@ -4,15 +4,18 @@
 #include <Adafruit_SSD1306.h>
 #include <avr/pgmspace.h>
 
+#define MAX_BOXES 6
+#define RESET_BUTTON 2
 #define OLED_RESET 4
+#define END_GAME_LEVEL 10
+#define JOY_ANALOG_X 1
+#define JOY_ANALOG_Y 0
+
 Adafruit_SSD1306 display(OLED_RESET);
 
 #if (SSD1306_LCDHEIGHT != 64)
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
-
-#define MAX_BOXES 6
-#define RESET_BUTTON 2
 
 static const unsigned char PROGMEM box_bmp [] = { 0xFF, 0x81, 0xA5, 0x99, 0x99, 0xA5, 0x81, 0xFF, };
 static const unsigned char PROGMEM wall_bmp [] = { 0xFF, 0x20, 0xFF, 0x04, 0xFF, 0x20, 0xFF, 0x04, };
@@ -38,13 +41,14 @@ struct BOX {
 };
 
 struct LVL {
-  byte px;
-  byte py;
-  byte l;
-  BOX bxs [MAX_BOXES];
-  TRG tgs [MAX_BOXES];
+  byte px; // player starting position x
+  byte py; // player starting position y
+  byte l;  // level map to load
+  BOX bxs [MAX_BOXES]; // array of boxes
+  TRG tgs [MAX_BOXES]; // attay of targets
 };
 
+// game levels
 static const LVL levels [] PROGMEM = {
   /* 0 */ { 6, 6, 0, { {1,6,2} }, { {1,9,3} } },
   /* 1 */ { 6, 6, 0, { {1,6,2},{1,6,5} }, { {1,9,3},{1,8,5} } },
@@ -79,68 +83,90 @@ TRG targets [MAX_BOXES];
 byte cur_level = 0;
 
 void setup() {
+  // initialize input
   pinMode(RESET_BUTTON, INPUT_PULLUP);
 
+  // initialize display
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  // show initial splash screen (to change this image, edit Adafruit_SSD1306.cpp directly)
   display.display();
   delay(1000);
+
+  // wait until player press a level reset button
   while (digitalRead(RESET_BUTTON)) {
     delay(16);
   }
+
+  // load first level
   load_level( cur_level );
 }
 
+// load level from progmem to ram, setup all level variables
 void load_level(byte l)
 {
-  // load level definition from program memory to ram
-  LVL lvl;
-  memcpy_P(&lvl, &levels[l], sizeof(LVL));
-
-  memcpy_P(&level, &level_maps[lvl.l * 16], 16);
-  
-  pl_x = lvl.px * 8;
-  pl_y = lvl.py * 8;
-  pm_x = pm_y = 0;
-  memcpy(boxes, lvl.bxs, MAX_BOXES*sizeof(BOX));
-  memcpy(targets, lvl.tgs, MAX_BOXES*sizeof(TRG));
+  // show level loading screen
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(26,26);
   display.println(String("LEVEL " + String(l+1)));
   display.display();
+
+  // load level definition from program memory to ram
+  LVL lvl;
+  memcpy_P(&lvl, &levels[l], sizeof(LVL));
+  
+  // load level map from progmem to ram
+  memcpy_P(&level, &level_maps[lvl.l * 16], 16);
+
+  // set-up player
+  pl_x = lvl.px * 8;
+  pl_y = lvl.py * 8;
+  pm_x = pm_y = 0;
+  // set-up boxes & targets
+  memcpy(boxes, lvl.bxs, MAX_BOXES*sizeof(BOX));
+  memcpy(targets, lvl.tgs, MAX_BOXES*sizeof(TRG));
+
+  // give player time to read what level is loading
   delay(1000);
 }
 
 void loop() {
+  // check if level is finished
   if ( level_finished() ) {
     well_done();
     cur_level++;
-    if (cur_level == 10) end_game();
+    if (cur_level == END_GAME_LEVEL) end_game();
     load_level( cur_level );
   }
-  
+
+  // update player
   player_movement();
 
+  // clear display
   display.clearDisplay();
 
-  // map
+  // draw map (level, boxes & targets)
   draw_level();
   draw_boxes();
 
-  // player
+  // draw player
   draw_player();
 
-  // rst btn
+  // handle level reset button
   if (!digitalRead(RESET_BUTTON)) {
     load_level( cur_level );
   }
-  
+
+  // flush buffer to display
   display.display();
 }
 
+// end game screen
 void end_game()
 {
+  well_done();
   cur_level = 0;
   display.fillRect(0, 16, 128, 32, WHITE);
   display.setTextSize(2);
@@ -153,6 +179,7 @@ void end_game()
   }
 }
 
+// end level screen
 void well_done()
 {
   display.fillRect(0, 16, 128, 32, WHITE);
@@ -164,10 +191,11 @@ void well_done()
   delay(1000);
 }
 
+// get input and move player/box if possible
 void player_movement()
 {
-  joy_x = (analogRead(1) - 512) / 100;
-  joy_y = -(analogRead(0) - 512) / 100;
+  joy_x = (analogRead(JOY_ANALOG_X) - 512) / 100;
+  joy_y = -(analogRead(JOY_ANALOG_Y) - 512) / 100;
 
   if (pm_x == 0 && pm_y == 0) {
     if (joy_x > 0) { pm_x = 1; } else 
@@ -178,9 +206,12 @@ void player_movement()
     // check if colliding with box and move it
     char i = have_box(pl_x/8+pm_x,pl_y/8+pm_y);
     if ( i >= 0 ) {
+      // check if box can be moved
       if (can_go(boxes[i].x+pm_x,boxes[i].y+pm_y)) {
+        // move box
         boxes[i].x += pm_x;
         boxes[i].y += pm_y;
+        // start box animation
         boxes[i].mx = - pm_x * 8;
         boxes[i].my = - pm_y * 8;
       }
@@ -188,12 +219,14 @@ void player_movement()
 
     // check if player can move
     if (!can_go(pl_x/8+pm_x,pl_y/8+pm_y)) {
+      // if not disable his movement
       pm_x = 0;
       pm_y = 0;
     }
   }
 }
 
+// draw all boxes and targets to scene
 void draw_boxes()
 {
   for (i = 0; i < MAX_BOXES; i++) {
@@ -210,6 +243,7 @@ void draw_boxes()
   }
 }
 
+// draw & animata player character
 void draw_player()
 {
   if ( pm_x != 0 ) {
@@ -223,6 +257,7 @@ void draw_player()
   display.drawBitmap(pl_x, pl_y, knight_bmp, 8, 8, 1);
 }
 
+// check if all boxes are laying on targets
 bool level_finished()
 {
   byte box_cnt = 0;
@@ -237,6 +272,7 @@ bool level_finished()
   return (box_fin == box_cnt);
 }
 
+// check if there is target on given position, return true/false
 bool have_target(unsigned char x, unsigned char y)
 {
   for (byte i = 0; i < MAX_BOXES; i++) {
@@ -267,6 +303,7 @@ bool can_go(unsigned char x, unsigned char y)
   return (i == 0);
 }
 
+// draw level walls from bitmap (16 bytes, each contains whole vertical column information)
 void draw_level()
 {
   for (x = 0; x < 16; x++) {
