@@ -81,6 +81,10 @@ int pm_y = 0;
 BOX boxes [MAX_BOXES];
 TRG targets [MAX_BOXES];
 byte cur_level = 0;
+int menu_pos = 0;
+char menu_dir = 0;
+byte menu_lev = 0;
+bool in_menu = true;
 
 void setup() {
   // initialize input
@@ -91,20 +95,16 @@ void setup() {
 
   // show initial splash screen (to change this image, edit Adafruit_SSD1306.cpp directly)
   display.display();
-  delay(1000);
-
-  // wait until player press a level reset button
-  while (digitalRead(RESET_BUTTON)) {
-    delay(16);
-  }
+  delay(5000);
 
   // load first level
-  load_level( cur_level );
+  in_menu = true;
 }
 
 // load level from progmem to ram, setup all level variables
 void load_level(byte l)
 {
+  in_menu = false;
   // show level loading screen
   display.clearDisplay();
   display.setTextSize(2);
@@ -133,12 +133,73 @@ void load_level(byte l)
 }
 
 void loop() {
+  if (in_menu) {
+    menu_loop();
+  } else {
+    game_loop();
+  }
+}
+
+void menu_loop()
+{
+  joy_x = (analogRead(JOY_ANALOG_X) - 512) / 100;
+
+  if (joy_x > 0 && menu_pos == menu_lev * 48) {
+    if (menu_lev < END_GAME_LEVEL - 1) menu_lev++;
+  }
+  if (joy_x < 0 && menu_pos == menu_lev * 48) {
+    if (menu_lev > 0) menu_lev--;
+  }
+
+  if (menu_pos > menu_lev * 48) {
+    menu_pos -= 8;
+    if (menu_pos < menu_lev * 48) menu_pos = menu_lev * 48;
+  }
+  if (menu_pos < menu_lev * 48) {
+    menu_pos += 8;
+    if (menu_pos > menu_lev * 48) menu_pos = menu_lev * 48;
+  }
+
+  display.clearDisplay();
+
+  display.fillRect(0, 0, 128, 11, WHITE);
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.setCursor(30,2);
+  display.print(String("SELECT LEVEL"));
+
+  display.setTextSize(3);
+  display.setTextColor(WHITE);
+  display.setTextWrap(false);
+
+  for (i = 0; i < END_GAME_LEVEL; i++) { // END_GAME_LEVEL
+    int x = 64 - ( i+1 < 10 ? 7 : 16 ) - menu_pos + i * 48;
+    if ( x < - 24 || x > 152 ) continue;
+    display.setCursor(x,30);
+    display.print(String(i+1));
+  }
+
+  display.drawRoundRect(64-24, 24, 48, 33, 4, WHITE);
+
+  display.display();
+
+  if (!digitalRead(RESET_BUTTON)) {
+    cur_level = menu_lev;
+    load_level(menu_lev);
+  }
+}
+
+void game_loop()
+{
   // check if level is finished
   if ( level_finished() ) {
     well_done();
     cur_level++;
-    if (cur_level == END_GAME_LEVEL) end_game();
-    load_level( cur_level );
+    if (cur_level == END_GAME_LEVEL) {
+      end_game();
+    } else {
+      load_level( cur_level );
+    }
   }
 
   // update player
@@ -167,7 +228,9 @@ void loop() {
 void end_game()
 {
   well_done();
-  cur_level = 0;
+  cur_level = END_GAME_LEVEL - 1;
+  menu_lev = END_GAME_LEVEL - 1;
+  in_menu = true;
   display.fillRect(0, 16, 128, 32, WHITE);
   display.setTextSize(2);
   display.setTextColor(BLACK);
@@ -177,6 +240,7 @@ void end_game()
   while (digitalRead(RESET_BUTTON)) {
     delay(16);
   }
+  delay(1000);
 }
 
 // end level screen
